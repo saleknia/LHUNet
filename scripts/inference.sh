@@ -3,9 +3,9 @@
 
 source activate lhunet
 
-export nnUNet_raw="/path/to/raw_data"
-export nnUNet_preprocessed="/path/to/pre_processed"
-export nnUNet_results="/path/to/where_to_save_results"
+export nnUNet_raw="/content/drive/MyDrive/nnUNet_raw_data"
+export nnUNet_preprocessed="/content/drive/MyDrive/nnUNet_preprocessed"
+export nnUNet_results="/content/drive/MyDrive/nnUNet_results"
 export nnUNet_compile=False ### LHU-Net is not compatible with PyTorch Compile Yet
 
 DatasetNumber=709 # choices: 700 (Synapse), 703 (Brats), 708 (LA), 709 (Lung)
