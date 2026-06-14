@@ -160,4 +160,3 @@ cython_debug/
 #.idea/
 tb_logs/
 
-nnUNet/
