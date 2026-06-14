@@ -1,9 +1,9 @@
 #!/bin/bash
 
 
-source /dss/dssfs04/lwp-dss-0002/pn36fu/pn36fu-dss-0000/reza/AmirSaleknia/miniconda3/etc/profile.d/conda.sh
-conda activate lhunet
-export PYTHONNOUSERSITE=1
+# source /dss/dssfs04/lwp-dss-0002/pn36fu/pn36fu-dss-0000/reza/AmirSaleknia/miniconda3/etc/profile.d/conda.sh
+# conda activate lhunet
+# export PYTHONNOUSERSITE=1
 export nnUNet_raw="/content/drive/MyDrive/nnUNet_raw_data"
 export nnUNet_preprocessed="/content/drive/MyDrive/nnUNet_preprocessed"
 export nnUNet_results="/content/drive/MyDrive/nnUNet_results"
