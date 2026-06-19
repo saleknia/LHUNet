@@ -462,22 +462,22 @@ class nnUNetTrainer(object):
                     dice_class=MemoryEfficientSoftDiceLoss,
                 )
 
-            elif self.args.dataset_name_or_id == "801":         # MSD Pancreas
-                loss = DC_and_CE_and_BDoU_loss(
-                    {'batch_dice': self.configuration_manager.batch_dice,
-                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp},
-                    {},
-                    bdou_kwargs={
-                        'n_classes' : self.label_manager.num_segmentation_heads,
-                        'ignore_bg' : True,
-                        'alpha_cap' : 0.8,
-                    },
-                    weight_ce  =1.0,
-                    weight_dice=1.0,
-                    weight_bdou=0.5,                            # boundary as refinement
-                    ignore_label=self.label_manager.ignore_label,
-                    dice_class=MemoryEfficientSoftDiceLoss,
-                ).to('cuda')
+            # elif self.args.dataset_name_or_id == "801":         # MSD Pancreas
+            #     loss = DC_and_CE_and_BDoU_loss(
+            #         {'batch_dice': self.configuration_manager.batch_dice,
+            #         'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp},
+            #         {},
+            #         bdou_kwargs={
+            #             'n_classes' : self.label_manager.num_segmentation_heads,
+            #             'ignore_bg' : True,
+            #             'alpha_cap' : 0.8,
+            #         },
+            #         weight_ce  =1.0,
+            #         weight_dice=1.0,
+            #         weight_bdou=0.5,                            # boundary as refinement
+            #         ignore_label=self.label_manager.ignore_label,
+            #         dice_class=MemoryEfficientSoftDiceLoss,
+            #     ).to('cuda')
 
             else:                                               # all other datasets
                 loss = DC_and_CE_loss(
