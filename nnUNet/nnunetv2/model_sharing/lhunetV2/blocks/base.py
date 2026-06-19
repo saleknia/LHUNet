@@ -119,69 +119,157 @@ def get_output_padding(
 
     return out_padding if len(out_padding) > 1 else out_padding[0]
 
-class SpaceToDepth3D(nn.Module):
-    def __init__(self, block_size=2):
+# class DownsampleWithSpaceToDepth(nn.Module):
+    def __init__(self, in_channels, out_channels=None):
         super().__init__()
-        self.block_size = block_size
-        
-    def forward(self, x):
+        out_channels = out_channels if out_channels is not None else in_channels
+        assert in_channels == out_channels, \
+            "Gated residual requires in_channels == out_channels"
+        expanded = in_channels * 8
+
+        self.maxpool = nn.MaxPool3d(kernel_size=2, stride=2)
+        self.space_to_depth = SpaceToDepth3D()
+
+        self.compress = nn.Conv3d(
+            expanded, out_channels,
+            kernel_size=1, bias=True,
+            groups=out_channels,
+        )
+
+        # Per-channel gate — one scalar per channel
+        # init at -6: sigmoid(-6) ≈ 0.002 → pure MaxPool at epoch 0
+        self.gate = nn.Parameter(torch.full((out_channels, 1, 1, 1), -6.0))
+
+        with torch.no_grad():
+            self.compress.weight.fill_(1.0 / 8)
+            self.compress.bias.zero_()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        mp = self.maxpool(x)                                  # baseline
+        learned = self.compress(self.space_to_depth(x))       # correction candidate
+        alpha = torch.sigmoid(self.gate)                      # (C, 1, 1, 1), ≈0 at init
+        return mp + alpha * (learned - mp)                    # gated residual
+
+class SpaceToDepth3D(nn.Module):
+    """
+    Rearranges (B, C, D, H, W) → (B, C * 8, D/2, H/2, W/2)
+    by folding each 2×2×2 spatial block into the channel dim.
+    Assumes all spatial dims are divisible by 2.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, C, D, H, W = x.shape
-        bs = self.block_size
-        
-        # print(f"Input shape: {x.shape}")
-        
-        # Pad to divisible size
-        D_pad = D - (D % bs)
-        H_pad = H - (H % bs)
-        W_pad = W - (W % bs)
-        
-        if D_pad != D or H_pad != H or W_pad != W:
-            x = x[:, :, :D_pad, :H_pad, :W_pad]
-            # print(f"After padding: {x.shape}")
-        
-        D_new = D_pad // bs
-        H_new = H_pad // bs
-        W_new = W_pad // bs
-        
-        # print(f"New spatial dims: {D_new}, {H_new}, {W_new}")
-        # print(f"Expected output channels: {C * (bs ** 3)}")
-        
-        # Reshape
-        x = x.reshape(B, C, D_new, bs, H_new, bs, W_new, bs)
-        # print(f"After reshape: {x.shape}")
-        
+        x = x.reshape(B, C, D//2, 2, H//2, 2, W//2, 2)
         x = x.permute(0, 1, 3, 5, 7, 2, 4, 6).contiguous()
-        # print(f"After permute: {x.shape}")
-        
-        x = x.reshape(B, C * (bs ** 3), D_new, H_new, W_new)
-        # print(f"Output shape: {x.shape}")
-        
+        x = x.reshape(B, C * 8, D//2, H//2, W//2)
         return x
 
 
 class DownsampleWithSpaceToDepth(nn.Module):
+    def __init__(self, in_channels, out_channels=None):
+        super().__init__()
+        out_channels = out_channels if out_channels is not None else in_channels
+        expanded = in_channels * 8  # bs=2, bs³=8
+
+        self.space_to_depth = SpaceToDepth3D()
+
+        # Grouped conv: each output channel only sees its own spatial copies
+        # params: in_channels × (out_channels // 8)  vs  in_channels*8 × out_channels
+        #self.compress = nn.Sequential(
+        #    nn.Conv3d(expanded, out_channels, kernel_size=1, bias=False, groups=out_channels),
+        #    nn.BatchNorm3d(out_channels),
+        #    nn.LeakyReLU(negative_slope=0.01, inplace=True),
+        #)
+
+        # Mean-pool init: each output channel averages its 8 spatial copies
+        #with torch.no_grad():
+        #    self.compress[0].weight.fill_(1.0 / 8)
+        self.compress = nn.Conv3d(
+            expanded, out_channels,
+            kernel_size=1, bias=True,  # bias=True since no BN
+            groups=out_channels
+        )
+
+        with torch.no_grad():
+            self.compress.weight.fill_(1.0 / 8)
+            self.compress.bias.zero_()
+            
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.space_to_depth(x)
+        x = self.compress(x)
+        return x
+
+class SpaceToDepth3D_old(nn.Module):
     """
-    3D spatial downsampling that preserves ALL information
-    Assumes in_channels is divisible by 8
+    Rearranges (B, C, D, H, W) → (B, C * bs³, D/bs, H/bs, W/bs)
+    by folding each (bs × bs × bs) spatial block into the channel dim.
+    Pads with zeros when spatial dims are not divisible by block_size.
     """
+    def __init__(self, block_size: int = 2):
+        super().__init__()
+        self.block_size = block_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, D, H, W = x.shape
+        bs = self.block_size
+
+        # --- Pad (not truncate) so dims are divisible by block_size ---
+        pad_d = (bs - D % bs) % bs
+        pad_h = (bs - H % bs) % bs
+        pad_w = (bs - W % bs) % bs
+        if pad_d or pad_h or pad_w:
+            # F.pad order: (W_last, W_first, H_last, H_first, D_last, D_first)
+            x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d))
+
+        _, _, D, H, W = x.shape          # refresh after padding
+        D_new, H_new, W_new = D // bs, H // bs, W // bs
+
+        # Fold spatial blocks into channels
+        x = x.reshape(B, C, D_new, bs, H_new, bs, W_new, bs)
+        x = x.permute(0, 1, 3, 5, 7, 2, 4, 6).contiguous()
+        x = x.reshape(B, C * (bs ** 3), D_new, H_new, W_new)
+        return x
+
+
+class DownsampleWithSpaceToDepth_old(nn.Module):
     def __init__(self, in_channels, out_channels=None, block_size=2):
         super().__init__()
-        
-        # out_channels is ignored since channels remain the same
-        # In 3D, block_size=2 gives 2×2×2 = 8 voxels
-        compressed_channels = in_channels // (block_size ** 3)
-        
-        # Compress channels
-        self.compress = nn.Conv3d(in_channels, compressed_channels, kernel_size=1)
-        
-        # Space-to-depth rearranges 2×2×2 blocks into channels
+        self.block_size = block_size
+        out_channels = out_channels if out_channels is not None else in_channels
+        expanded = in_channels * (block_size ** 3)
+
         self.space_to_depth = SpaceToDepth3D(block_size=block_size)
-        
+
+        # Project expanded channels back down
+        self.compress = nn.Sequential(
+            nn.Conv3d(expanded, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm3d(out_channels),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+        )
+
+        # Initialize compress conv as a max-approximating mean
+        # so early training behaves close to avgpool, not random noise
+        self._init_compress_as_mean(in_channels, out_channels, block_size)
+
+    def _init_compress_as_mean(self, in_channels, out_channels, block_size):
+        """
+        Initialize weights so each output channel is the mean of its
+        corresponding input channel across the block_size^3 copies.
+        This makes the module behave like AvgPool at init, giving a
+        stable starting point rather than random compression.
+        """
+        factor = block_size ** 3
+        with torch.no_grad():
+            w = self.compress[0].weight  # (out_channels, expanded, 1, 1, 1)
+            w.zero_()
+            # Each output channel i gets 1/factor weight on channels i, i+out, i+2*out...
+            for i in range(min(in_channels, out_channels)):
+                for k in range(factor):
+                    w[i, i + k * in_channels, 0, 0, 0] = 1.0 / factor
+
     def forward(self, x):
-        # Step 1: Compress to in_channels // 8
-        x = self.compress(x)
-        
-        # Step 2: Space-to-depth (channels × 8 = back to in_channels, spatial ÷ 2)
         x = self.space_to_depth(x)
-        
+        x = self.compress(x)
         return x

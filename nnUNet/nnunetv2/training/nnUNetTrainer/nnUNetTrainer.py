@@ -53,7 +53,7 @@ from nnunetv2.training.data_augmentation.compute_initial_patch_size import get_p
 from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 from nnunetv2.training.logging.nnunet_logger import nnUNetLogger
-from nnunetv2.training.loss.compound_losses import DC_and_CE_loss, DC_and_BCE_loss
+from nnunetv2.training.loss.compound_losses import DC_and_CE_loss, DC_and_BCE_loss, DC_and_CE_and_BDoU_loss
 from nnunetv2.training.loss.deep_supervision import DeepSupervisionWrapper
 from nnunetv2.training.loss.dice import get_tp_fp_fn_tn, MemoryEfficientSoftDiceLoss
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
@@ -160,7 +160,7 @@ class nnUNetTrainer(object):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 100
+        self.num_epochs = 60
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -271,7 +271,7 @@ class nnUNetTrainer(object):
             # if ddp, wrap in DDP wrapper
             if self.is_ddp:
                 self.network = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.network)
-                self.network = DDP(self.network, device_ids=[self.local_rank])
+                self.network = DDP(self.network, device_ids=[self.local_rank], find_unused_parameters=True)
 
             self.loss = self._build_loss()
 
@@ -444,21 +444,51 @@ class nnUNetTrainer(object):
 
     def _build_loss(self):
         if self.label_manager.has_regions:
-            loss = DC_and_BCE_loss({},
-                                   {'batch_dice': self.configuration_manager.batch_dice,
-                                    'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
-                                   use_ignore_label=self.label_manager.ignore_label is not None,
-                                   dice_class=MemoryEfficientSoftDiceLoss)
+            loss = DC_and_BCE_loss(
+                {},
+                {'batch_dice': self.configuration_manager.batch_dice,
+                'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
+                use_ignore_label=self.label_manager.ignore_label is not None,
+                dice_class=MemoryEfficientSoftDiceLoss,
+            )
         else:
-            if self.args.dataset_name_or_id == "700":  ### Only for Synapse
-                loss = DC_and_CE_loss({'batch_dice': self.configuration_manager.batch_dice,
-                                       'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, {},
-                                      weight_ce=0.35, weight_dice=0.65,
-                                      ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
-            else:
-                loss = DC_and_CE_loss({'batch_dice': self.configuration_manager.batch_dice,
-                                       'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, {}, weight_ce=1, weight_dice=1,
-                                      ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
+            if self.args.dataset_name_or_id == "700":           # Synapse
+                loss = DC_and_CE_loss(
+                    {'batch_dice': self.configuration_manager.batch_dice,
+                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp},
+                    {},
+                    weight_ce=0.35, weight_dice=0.65,
+                    ignore_label=self.label_manager.ignore_label,
+                    dice_class=MemoryEfficientSoftDiceLoss,
+                )
+
+            elif self.args.dataset_name_or_id == "801":         # MSD Pancreas
+                loss = DC_and_CE_and_BDoU_loss(
+                    {'batch_dice': self.configuration_manager.batch_dice,
+                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp},
+                    {},
+                    bdou_kwargs={
+                        'n_classes' : self.label_manager.num_segmentation_heads,
+                        'ignore_bg' : True,
+                        'alpha_cap' : 0.8,
+                    },
+                    weight_ce  =1.0,
+                    weight_dice=1.0,
+                    weight_bdou=0.5,                            # boundary as refinement
+                    ignore_label=self.label_manager.ignore_label,
+                    dice_class=MemoryEfficientSoftDiceLoss,
+                ).to('cuda')
+
+            else:                                               # all other datasets
+                loss = DC_and_CE_loss(
+                    {'batch_dice': self.configuration_manager.batch_dice,
+                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp},
+                    {},
+                    weight_ce=1, weight_dice=1,
+                    ignore_label=self.label_manager.ignore_label,
+                    dice_class=MemoryEfficientSoftDiceLoss,
+                )
+        return loss
 
         if self._do_i_compile():
             loss.dc = torch.compile(loss.dc)

@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from ..modules.vit.new import HybAttnBlock
 from .base import BaseBlock, get_conv_layer, DownsampleWithSpaceToDepth
 from .cnn import get_cnn_block
-
+from ..modules.cross_psa import CrossPSA3D  
 
 __all__ = ["HybridEncoder", "HybridDecoder"]
 
@@ -129,8 +129,8 @@ class HybridEncoder(BaseBlock, BaseHybridBlock):
                         dropout=c_do,
                     ),
                     (
-                        nn.MaxPool3d(kernel_size=c_st, stride=c_st)
-                        # DownsampleWithSpaceToDepth(in_channels=och, out_channels=och)
+                        # nn.MaxPool3d(kernel_size=c_st, stride=c_st)
+                        DownsampleWithSpaceToDepth(in_channels=och, out_channels=och)
                         if c_mp
                         else nn.Identity()
                     ),
@@ -267,7 +267,8 @@ class HybridDecoder(BaseBlock, BaseHybridBlock):
         io_channles = [in_channels] + features
         io_channles = [(i, o) for i, o in zip(io_channles[:-1], io_channles[1:])]
 
-        self.ups, self.convs, self.attns, self.convs_o = [
+        #self.ups, self.convs, self.attns, self.convs_o, self.skip_align = [
+        self.ups, self.convs, self.attns, self.convs_o = [ 
             nn.ModuleList() for _ in range(4)
         ]
         
@@ -323,7 +324,9 @@ class HybridDecoder(BaseBlock, BaseHybridBlock):
                     is_transposed=True,
                 )
             )
-
+            #self.skip_align.append(
+            #    CrossPSA3D(skip_channels=skch, decoder_channels=och)
+            #)
             vit_chs = och + skch if self.skip_mode == "cat" else och
             # ===== PASS STAGE_ID TO HybAttnBlock IN DECODER =====
             self.attns.append(
@@ -386,12 +389,14 @@ class HybridDecoder(BaseBlock, BaseHybridBlock):
 
     def forward(self, x, skips: list, return_outs=False):
         outs = []
-        for up, conv, attn, conv_o in zip(
-            self.ups, self.convs, self.attns, self.convs_o
-        ):
+        for up, conv, attn, conv_o in zip(self.ups, self.convs, self.attns, self.convs_o):
             # print("Decode - HybridDecode, x.shape:", x.shape)
 
             x = up(x)
+
+            # skip = skip_align(skips.pop(), x)
+            # x    = torch.cat((x, skip), dim=1)
+            
             if self.skip_mode == "sum":
                 x = x + skips.pop()
             else:

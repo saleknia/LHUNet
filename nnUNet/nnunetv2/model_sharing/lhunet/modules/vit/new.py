@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from ..cnn import *
 
-
 class HybAttnBlock(nn.Module):
     def __init__(
         self,

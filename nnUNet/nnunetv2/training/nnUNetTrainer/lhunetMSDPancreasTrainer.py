@@ -22,8 +22,8 @@ class lhunetMSDPancreasTrainer(nnUNetTrainer):
         self.initial_lr = 0.01
         ####### Dirty hack to make sure the batch and patch size are set correctly for nnUNetTrainer #######
         self.configuration_manager.configuration["patch_size"] = [96,96,96]
-        self.configuration_manager.configuration["batch_size"] = 2
-        self.batch_size = 2
+        self.configuration_manager.configuration["batch_size"] = 8
+        self.batch_size = 8
         print(f"batch size: {self.configuration_manager.batch_size}")
         print(f"patch size: {self.configuration_manager.patch_size}")
 
@@ -44,7 +44,7 @@ class lhunetMSDPancreasTrainer(nnUNetTrainer):
             # encoder params
             cnn_kernel_sizes=[3, 3],
             cnn_features=[12, 16],
-#            cnn_strides=[[1, 2, 2], 2],
+            # cnn_strides=[[1, 2, 2], 2],
             cnn_strides=[2, 2],
             cnn_maxpools=[True, True],
             cnn_dropouts=0.0,
