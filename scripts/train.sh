@@ -13,6 +13,6 @@ trainer=lhunetV2MSDPancreasTrainer # choices: lhunetSynapseTrainer, lhunetBratsT
 
 # Training
 nnUNetv2_train $DatasetNumber 3d_fullres 0 -tr $trainer
-nnUNetv2_train $DatasetNumber 3d_fullres 0 --val --val_best -tr $trainer -p nnUNetPlans
 
-python measure_inference_timing.py
+# Inference / Validation with timing
+time nnUNetv2_train $DatasetNumber 3d_fullres 0 --val --val_best -tr $trainer -p nnUNetPlans
